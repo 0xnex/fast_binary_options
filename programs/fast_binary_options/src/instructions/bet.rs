@@ -50,8 +50,8 @@ impl<'info> PlaceBet<'info> {
         let clock = Clock::get()?;
         let current_timestamp = clock.unix_timestamp as u64;
 
-        if current_timestamp >= round_id {
-            return Err(MyErrorCode::RoundStarted.into());
+        if current_timestamp >= round_id || round_id % 300 != 0 {
+            return Err(MyErrorCode::InvalidRoundId.into());
         }
 
         if amount == 0 {

@@ -16,8 +16,8 @@ pub enum MyErrorCode {
     AlreadySettled,
     #[msg("Round not settled")]
     RoundNotSettled,
-    #[msg("Round started")]
-    RoundStarted,
+    #[msg("Invalid Round Id")]
+    InvalidRoundId,
     #[msg("Invalid instruction")]
     InvalidInstruction,
     #[msg("signature verification failed")]
