@@ -1,5 +1,7 @@
+use crate::errors::MyErrorCode;
 use crate::states::AdminAccount;
 use anchor_lang::prelude::*;
+use anchor_lang::system_program;
 
 #[derive(Accounts)]
 pub struct InitializeAdmin<'info> {
@@ -71,7 +73,8 @@ impl<'info> SetAdminAuthority<'info> {
 pub struct WithdrawFee<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
-    #[account(mut, has_one = authority)]
+
+    #[account(mut, has_one = authority, seeds = [b"admin"], bump)]
     pub admin_account: Box<Account<'info, AdminAccount>>,
 
     /// CHECK: safe
@@ -84,10 +87,19 @@ pub struct WithdrawFee<'info> {
 impl<'info> WithdrawFee<'info> {
     pub fn process(&mut self) -> Result<()> {
         let admin_account = &mut self.admin_account;
+        let to = &mut self.to;
         let fee = admin_account.fee;
-        self.to.add_lamports(fee)?;
-        admin_account.sub_lamports(fee)?;
+
+        if fee == 0 {
+            return Err(MyErrorCode::ZeroAmount.into());
+        }
+        // Transfer fee to admin
+        **to.try_borrow_mut_lamports()? += fee;
+        **admin_account.to_account_info().try_borrow_mut_lamports()? -= fee;
+
+        // Reset fee to zero
         admin_account.fee = 0;
+
         Ok(())
     }
 }

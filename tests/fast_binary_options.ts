@@ -1,11 +1,10 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program, utils, BN } from "@coral-xyz/anchor";
 import { FastBinaryOption } from "../target/types/fast_binary_option";
-import { PublicKey, SystemProgram, Keypair, LAMPORTS_PER_SOL, Transaction } from "@solana/web3.js";
+import { PublicKey, SystemProgram, Keypair, LAMPORTS_PER_SOL, Transaction, AccountInfo } from "@solana/web3.js";
 import { expect } from "chai";
 import * as ed from "@noble/ed25519";
-import { assert } from "chai";
-
+import FastBinaryOptions from "./utils";
 function to32B(seed: string): Uint8Array {
   let seedBytes = utils.bytes.bs58.decode(seed);
   if (seedBytes.length < 32) {
@@ -22,8 +21,9 @@ describe("fast_binary_option", () => {
   // because we cannot get logs for them (only through overkill `onLogs`)
   provider.opts.commitment = "confirmed";
   anchor.setProvider(provider);
-
   const program = anchor.workspace.FastBinaryOption as Program<FastBinaryOption>;
+
+  const fb = new FastBinaryOptions(program, provider);
 
 
   const admin = Keypair.fromSeed(to32B("1"))
@@ -32,267 +32,322 @@ describe("fast_binary_option", () => {
   const newOracleAuthority = Keypair.fromSeed(to32B("4"))
   const user0 = Keypair.fromSeed(to32B("5"))
   const user1 = Keypair.fromSeed(to32B("6"))
-  const user2 = Keypair.fromSeed(to32B("7"))
-  const user3 = Keypair.fromSeed(to32B("8"))
-  const user4 = Keypair.fromSeed(to32B("9"))
-  const user5 = Keypair.fromSeed(to32B("a"))
+  // const user2 = Keypair.fromSeed(to32B("7"))
+  // const user3 = Keypair.fromSeed(to32B("8"))
+  // const user4 = Keypair.fromSeed(to32B("9"))
+  // const user5 = Keypair.fromSeed(to32B("a"))
 
-
-  const users = [admin, oracleAuthority, newAdmin, newOracleAuthority, user0, user1, user2, user3, user4, user5];
-
-  console.log("admin", admin.publicKey.toBase58())
-  console.log("newAdmin", newAdmin.publicKey.toBase58())
-
-  const [adminPDA, bump] = PublicKey.findProgramAddressSync(
-    [Buffer.from("admin")],
-    program.programId
-  );
-
-
-  const airdropSol = async (kp: Keypair) => {
-    const sig = await provider.connection.requestAirdrop(kp.publicKey, 5 * LAMPORTS_PER_SOL);
-    await provider.connection.confirmTransaction({
-      signature: sig,
-      ...(await provider.connection.getLatestBlockhash()),
-    });
-    console.log("airdropSol", kp.publicKey.toBase58())
-  };
+  const users = [admin, oracleAuthority, newAdmin, newOracleAuthority, user0, user1,];
 
   before(async () => {
+    const amount = 5 * LAMPORTS_PER_SOL
     for (const user of users) {
-      await airdropSol(user);
+      await fb.airdropSol(user, amount);
+      console.log(`Airdropped 5 SOL to ${user.publicKey.toBase58()}`);
     }
-
-
-    // const data = await program.account.adminAccount.fetch(adminPDA);
-    // console.log("data", data)
-    // if (data) {
-    //   const tx = await program.methods
-    //     .deleteAdmin()
-    //     .accountsPartial({
-    //       authority: newAdmin.publicKey,
-    //       adminAccount: adminPDA,
-    //     })
-    //     .signers([newAdmin])
-    //     .rpc();
-    //   console.log("tx", tx)
-    // }
   });
 
   it("initializes admin account", async () => {
-    const tx = await program.methods
-      .initializeAdmin(oracleAuthority.publicKey)
-      .accountsPartial({
-        adminAccount: adminPDA,
-        user: admin.publicKey,
-      })
-      .signers([admin])
-      .rpc();
-    console.log("tx", tx)
-    const data = await program.account.adminAccount.fetch(adminPDA);
+    await fb.initializeAdmin(admin, oracleAuthority);
+    const [data] = await fb.getPDAData(admin, fb.getRoundId());
     expect(data.authority.toBase58()).to.equal(admin.publicKey.toBase58());
     expect(data.oracleAuthority.toBase58()).to.equal(oracleAuthority.publicKey.toBase58());
   });
-
 
 
   it("updates oracle authority", async () => {
-    const tx = await program.methods
-      .setOracleAuthority(newOracleAuthority.publicKey)
-      .accountsPartial({
-        adminAccount: adminPDA,
-        authority: admin.publicKey,
-      })
-      .signers([admin])
-      .rpc();
-    console.log("tx", tx)
-    const data = await program.account.adminAccount.fetch(adminPDA);
-    expect(data.authority.toBase58()).to.equal(admin.publicKey.toBase58());
+    await fb.updateOracleAuthority(admin, newOracleAuthority);
+    const [data] = await fb.getPDAData(admin, fb.getRoundId());
     expect(data.oracleAuthority.toBase58()).to.equal(newOracleAuthority.publicKey.toBase58());
   });
 
-  // it("update oracle authority fails", async () => {
-  //   const ixs = [
-  //     await program.methods.setOracleAuthority(oracleAuthority.publicKey)
-  //       .accountsPartial({ adminAccount: adminPDA, authority: newAdmin.publicKey }).signers([newAdmin])
-  //       .instruction(),
-  //   ]
-
-  //   const tx = new Transaction()
-  //   tx.recentBlockhash = svm.latestBlockhash()
-  //   tx.add(...ixs)
-  //   tx.sign(newAdmin)
-  //   const res = svm.sendTransaction(tx) as FailedTransactionMetadata
-  //   expect(res.err()).is.not.null
-
-  //   const ata = svm.getAccount(adminPDA)
-  //   const data = program.coder.accounts.decode("adminAccount", Buffer.from(ata?.data))
-  //   expect(data.authority.equals(admin.publicKey)).to.be.true;
-  //   expect(data.oracleAuthority.equals(newOracleAuthority.publicKey)).to.be.true;
-  // });
-
-  it("update authority succeeds", async () => {
-    const ixs = [
-      await program.methods.setAdminAuthority(newAdmin.publicKey)
-        .accountsPartial({ adminAccount: adminPDA, authority: admin.publicKey })
-        .instruction(),
-      await program.methods.setOracleAuthority(oracleAuthority.publicKey)
-        .accountsPartial({ adminAccount: adminPDA, authority: newAdmin.publicKey })
-        .instruction(),
-    ]
-    const tx = new Transaction().add(...ixs)
-    tx.recentBlockhash = (await provider.connection.getLatestBlockhash()).blockhash
-    const res = await provider.connection.sendTransaction(tx, [admin, newAdmin])
-    await provider.connection.confirmTransaction({
-      signature: res,
-      ...(await provider.connection.getLatestBlockhash()),
-    });
-    const data = await program.account.adminAccount.fetch(adminPDA);
+  it("updates authority", async () => {
+    await fb.updateAdminAuthority(admin, newAdmin);
+    const [data] = await fb.getPDAData(admin, fb.getRoundId());
     expect(data.authority.toBase58()).to.equal(newAdmin.publicKey.toBase58());
-    expect(data.oracleAuthority.toBase58()).to.equal(oracleAuthority.publicKey.toBase58());
+  });
+
+  it("update oracle and authority fails", async () => {
+    try {
+      await fb.updateOracleAuthority(admin, newOracleAuthority);
+      expect.fail("Should have failed");
+    } catch (e) {
+      expect(e).not.null
+    }
+
+    try {
+      await fb.updateAdminAuthority(admin, newAdmin);
+      expect.fail("Should have failed");
+    } catch (e) {
+      expect(e).not.null
+    }
+
+    const [adminAccountData] = await fb.getPDAData(admin, fb.getRoundId());
+    expect(adminAccountData.authority.toBase58()).to.equal(newAdmin.publicKey.toBase58());
+    expect(adminAccountData.oracleAuthority.toBase58()).to.equal(newOracleAuthority.publicKey.toBase58());
   })
 
   it("bet", async () => {
-    const now = Math.floor(Date.now() / 1000);
-    const roundId = Math.floor(now / 300) * 300 + 300;
-    const betAmount = LAMPORTS_PER_SOL * 0.1
-    const roundIdSeed = new BN(roundId).toArrayLike(Buffer, "le", 8)
+    const roundId = fb.getRoundId();
+    const amount = LAMPORTS_PER_SOL * 0.1
+    const fee = amount * 0.05
+    const bet = amount - fee
 
-    const userRoundAccount = PublicKey.findProgramAddressSync(
-      [Buffer.from("user"), user0.publicKey.toBuffer(), roundIdSeed],
-      program.programId
-    )[0];
-
-
-    const roundAccount = PublicKey.findProgramAddressSync(
-      [Buffer.from("round"), roundIdSeed],
-      program.programId
-    )[0];
-
-    const adminAccount = PublicKey.findProgramAddressSync(
-      [Buffer.from("admin")],
-      program.programId
-    )[0];
-
-    const res = await program.methods
-      .placeBet(new BN(roundId), new BN(betAmount), true)
-      .accountsPartial({
-        user: user0.publicKey,
-        userRoundAccount,
-        roundAccount,
-        adminAccount,
-        systemProgram: SystemProgram.programId
-      })
-      .signers([user0])
-      .rpc({ commitment: "confirmed" });
-
-    await provider.connection.confirmTransaction({
-      signature: res,
-      ...(await provider.connection.getLatestBlockhash()),
-    });
-
-    const userRoundAccountData = await program.account.userRoundAccount.fetch(userRoundAccount);
+    await fb.placeBet(user0, roundId, new BN(amount), true);
+    const [adminAccountData, roundAccountData, userRoundAccountData] = await fb.getPDAData(user0, roundId);
     expect(userRoundAccountData.roundId.toNumber()).to.equal(roundId)
-    expect(userRoundAccountData.up.toNumber()).to.equal(betAmount)
+    expect(userRoundAccountData.up.toNumber()).to.equal(bet)
     expect(userRoundAccountData.down.toNumber()).to.equal(0)
     expect(userRoundAccountData.settled).to.be.false
 
-    const roundAccountData = await program.account.roundAccount.fetch(roundAccount);
     expect(roundAccountData.roundId.toNumber()).to.equal(roundId)
-    expect(roundAccountData.up.toNumber()).to.equal(betAmount)
+    expect(roundAccountData.up.toNumber()).to.equal(bet)
     expect(roundAccountData.down.toNumber()).to.equal(0)
+
+    expect(adminAccountData.fee.toNumber()).to.equal(fee)
   })
 
-  it("settle bet", async () => {
-    const now = Math.floor(Date.now() / 1000);
-    const roundId = Math.floor(now / 300) * 300 + 300;
-    const betAmount = LAMPORTS_PER_SOL * 0.1
-    const roundIdSeed = new BN(roundId).toArrayLike(Buffer, "le", 8)
-
-    const userRoundAccount = PublicKey.findProgramAddressSync(
-      [Buffer.from("user"), user0.publicKey.toBuffer(), roundIdSeed],
-      program.programId
-    )[0];
-
-
-    const roundAccount = PublicKey.findProgramAddressSync(
-      [Buffer.from("round"), roundIdSeed],
-      program.programId
-    )[0];
-
-    const adminAccount = PublicKey.findProgramAddressSync(
-      [Buffer.from("admin")],
-      program.programId
-    )[0];
-
-    const placeBetSig = await program.methods
-      .placeBet(new BN(roundId), new BN(betAmount), true)
-      .accountsPartial({
-        user: user0.publicKey,
-        userRoundAccount,
-        roundAccount,
-        adminAccount,
-        systemProgram: SystemProgram.programId
-      })
-      .signers([user0])
-      .rpc({ commitment: "confirmed" });
-
-    await provider.connection.confirmTransaction({
-      signature: placeBetSig,
-      ...(await provider.connection.getLatestBlockhash()),
-    });
-
-
+  it("settle round", async () => {
+    const roundId = fb.getRoundId();
     const startPrice = new BN(100)
     const endPrice = new BN(200)
 
-    const msg = Buffer.from(`${roundId}:${startPrice.toNumber()}:${endPrice.toNumber()}`)
+    await fb.settleRound(user0, newOracleAuthority, roundId, startPrice, endPrice);
 
-    const signature = await ed.signAsync(msg, oracleAuthority.secretKey.slice(0, 32))
-
-    let tx = new Transaction()
-      .add(
-        anchor.web3.Ed25519Program.createInstructionWithPublicKey({
-          publicKey: oracleAuthority.publicKey.toBytes(),
-          message: msg,
-          signature: signature,
-        }))
-      .add(
-        await program.methods
-          .settleBet(new BN(roundId), new BN(100), new BN(200), Array.from(signature))
-          .accountsPartial({
-            user: user0.publicKey,
-            userRoundAccount,
-            roundAccount,
-            adminAccount,
-            instructionSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
-            systemProgram: SystemProgram.programId
-          })
-          .signers([user0])
-          .instruction()
-      )
-
-    const { lastValidBlockHeight, blockhash } =
-      await provider.connection.getLatestBlockhash();
-    tx.lastValidBlockHeight = lastValidBlockHeight;
-    tx.recentBlockhash = blockhash;
-    tx.feePayer = user0.publicKey;
-
-    tx.sign(user0);
-
-    const settleBetSig = await provider.connection.sendRawTransaction(tx.serialize(), { preflightCommitment: "confirmed" });
-
-    await provider.connection.confirmTransaction({
-      signature: settleBetSig,
-      ...(await provider.connection.getLatestBlockhash()),
-    });
-
-    const roundAccountData = await program.account.roundAccount.fetch(roundAccount);
-    expect(roundAccountData.startPrice.toNumber()).to.equal(startPrice.toNumber());
-    expect(roundAccountData.endPrice.toNumber()).to.equal(endPrice.toNumber());
-    expect(roundAccountData.up.toNumber()).to.equal(betAmount);
-    expect(roundAccountData.down.toNumber()).to.equal(0);
-
-
+    const [, roundAccountData,] = await fb.getPDAData(user0, roundId);
+    expect(roundAccountData.startPrice.toNumber()).to.equal(startPrice.toNumber())
+    expect(roundAccountData.endPrice.toNumber()).to.equal(endPrice.toNumber())
   })
+
+  it("fails to place bet with zero amount", async () => {
+    const roundId = fb.getRoundId();
+
+    try {
+      await fb.placeBet(user0, roundId, new BN(0), true);
+      expect.fail("Should have failed");
+    } catch (e) {
+      expect(e).to.not.be.null;
+    }
+  });
+
+  it("fails to place bet with insufficient balance", async () => {
+    const roundId = fb.getRoundId();
+
+    try {
+      await fb.placeBet(user0, roundId, new BN(LAMPORTS_PER_SOL * 1000), true);
+      expect.fail("Should have failed");
+    } catch (e) {
+      expect(e).to.not.be.null;
+    }
+  });
+
+  it("fails to settle already settled round", async () => {
+    const roundId = fb.getRoundId() + 100000;
+    const startPrice = new BN(100);
+    const endPrice = new BN(200);
+
+    const betAmount = LAMPORTS_PER_SOL * 0.1;
+    await fb.placeBet(user0, roundId, new BN(betAmount), true);
+    await fb.settleRound(user0, newOracleAuthority, roundId, startPrice, endPrice);
+
+    try {
+      await fb.settleRound(user0, newOracleAuthority, roundId, startPrice, endPrice);
+      expect.fail('should have failed')
+    } catch (e) {
+      expect(e).to.not.be.null;
+    }
+  });
+
+  it("withdraws fees as admin", async () => {
+    const roundId = fb.getRoundId();
+    const [adminAccount] = fb.getPDAs(user0, roundId);
+    const betAmount = LAMPORTS_PER_SOL * 0.1;
+    await fb.placeBet(user0, roundId, new BN(betAmount), true);
+    const [adminAccountData0] = await fb.getPDAData(user0, roundId)
+    const initialAdminBalance = await provider.connection.getBalance(newAdmin.publicKey);
+    const initialAdminAccountBalance = await provider.connection.getBalance(adminAccount);
+
+    const expectedFee = adminAccountData0.fee.toNumber()
+    console.log("Initial admin balance:", initialAdminBalance);
+    console.log("Initial admin account balance:", initialAdminAccountBalance);
+    console.log("Initial fee:", expectedFee)
+
+    // Withdraw fees
+    await fb.withdrawFees(newAdmin);
+
+
+    // Verify balances
+    const finalAdminBalance = await provider.connection.getBalance(newAdmin.publicKey);
+    const finalAdminAccountBalance = await provider.connection.getBalance(adminAccount);
+
+    console.log("Final admin balance:", finalAdminBalance);
+    console.log("Final admin account balance:", finalAdminAccountBalance);
+
+    // Calculate expected fee (5% of bet amount)
+
+    console.log("Expected fee:", expectedFee);
+    console.log("Balance difference:", finalAdminBalance - initialAdminBalance);
+
+    expect(finalAdminBalance - initialAdminBalance).to.equal(expectedFee);
+    expect(initialAdminAccountBalance - finalAdminAccountBalance).to.equal(expectedFee);
+    const [adminAccountData1] = await fb.getPDAData(user0, roundId)
+    expect(adminAccountData1.fee.toNumber()).to.eq(0)
+  });
+
+  it("fails to withdraw fees as non-admin", async () => {
+    const roundId = fb.getRoundId();
+    await fb.placeBet(user0, roundId, new BN(LAMPORTS_PER_SOL * 0.1), true);
+
+    try {
+      await fb.withdrawFees(user0);
+      expect.fail("Should have failed");
+    } catch (e) {
+      expect(e).to.not.be.null;
+    }
+  });
+
+  it("verifies user rewards and fees", async () => {
+    const roundId = fb.getRoundId() + 7000;
+    const betAmount = LAMPORTS_PER_SOL * 0.1;
+    const fee = betAmount * 0.05;
+    const actualBetAmount = betAmount - fee;
+
+    const [adminAccount] = fb.getPDAs(user0, roundId);
+
+    // Place bet
+    await fb.placeBet(user0, roundId, new BN(betAmount), true);
+
+    // Settle round with price going up
+    await fb.settleRound(user0, newOracleAuthority, roundId, new BN(100), new BN(200));
+
+    // Get initial balances
+    const initialUserBalance = await provider.connection.getBalance(user0.publicKey);
+    const initialAdminBalance = await provider.connection.getBalance(adminAccount);
+
+    // Settle bet
+    await fb.settleBet(user0, roundId);
+
+    // Get final balances
+    const finalUserBalance = await provider.connection.getBalance(user0.publicKey);
+    const finalAdminBalance = await provider.connection.getBalance(adminAccount);
+
+    // Calculate expected reward
+    // reward = user's winning bet * total bets / total winning bets
+    const totalBets = actualBetAmount; // Only one bet in this round
+    const winningBets = actualBetAmount; // All bets are winning in this case
+    const expectedReward = actualBetAmount * totalBets / winningBets;
+
+    // Verify balances
+    const userBalanceChange = new BN(finalUserBalance - initialUserBalance);
+    const adminBalanceChange = new BN(finalAdminBalance - initialAdminBalance);
+
+    console.log("User balance change:", userBalanceChange);
+    console.log("Expected reward:", expectedReward);
+    console.log("Admin balance change:", adminBalanceChange);
+    console.log("Expected fee:", fee);
+
+    // User should receive the reward
+    expect(userBalanceChange).to.equal(expectedReward);
+    // Admin should have the fee
+    expect(adminBalanceChange).to.equal(fee);
+  });
+
+  it("verifies user rewards when price goes down", async () => {
+    const roundId = fb.getRoundId();
+    const betAmount = LAMPORTS_PER_SOL * 0.1;
+    const fee = betAmount * 0.05;
+    const actualBetAmount = betAmount - fee;
+
+    await fb.placeBet(user0, roundId, new BN(betAmount), false);
+    await fb.settleRound(user0, oracleAuthority, roundId, new BN(200), new BN(100));
+
+    const [adminAccount] = fb.getPDAs(user0, roundId);
+
+    // Get initial balances
+    const initialUserBalance = await provider.connection.getBalance(user0.publicKey);
+    const initialAdminBalance = await provider.connection.getBalance(adminAccount);
+
+    // Settle bet
+    await fb.settleBet(user0, roundId);
+
+    // Get final balances
+    const finalUserBalance = await provider.connection.getBalance(user0.publicKey);
+    const finalAdminBalance = await provider.connection.getBalance(adminAccount);
+
+    // Calculate expected reward
+    // reward = user's winning bet * total bets / total winning bets
+    const totalBets = actualBetAmount; // Only one bet in this round
+    const winningBets = actualBetAmount; // All bets are winning in this case
+    const expectedReward = actualBetAmount * totalBets / winningBets;
+
+    // Verify balances
+    const userBalanceChange = finalUserBalance - initialUserBalance
+    const adminBalanceChange = finalAdminBalance - initialAdminBalance
+
+
+    console.log("User balance change:", userBalanceChange.toString());
+    console.log("Expected reward:", expectedReward.toString());
+    console.log("Admin balance change:", adminBalanceChange.toString());
+    console.log("Expected fee:", fee.toString());
+
+    // User should receive the reward
+    expect(userBalanceChange).to.be.eq(expectedReward);
+    // Admin should have the fee
+    expect(adminBalanceChange).to.be.eq(fee);
+  });
+
+  it("verifies multiple users rewards", async () => {
+    const roundId = fb.getRoundId();
+    const betAmount1 = LAMPORTS_PER_SOL * 0.1;
+    const betAmount2 = LAMPORTS_PER_SOL * 0.2;
+    const fee1 = betAmount1 * 0.05;
+    const fee2 = betAmount2 * 0.05;
+    const actualBetAmount1 = betAmount1 - fee1;
+    const actualBetAmount2 = betAmount2 - fee2;
+
+    const [adminAccount] = fb.getPDAs(user0, roundId);
+
+    // Place bets
+    await fb.placeBet(user0, roundId, new BN(betAmount1), true);
+    await fb.placeBet(user1, roundId, new BN(betAmount2), true);
+
+    // Get initial balances
+    const initialUser1Balance = await provider.connection.getBalance(user0.publicKey);
+    const initialUser2Balance = await provider.connection.getBalance(user1.publicKey);
+    const initialAdminBalance = await provider.connection.getBalance(adminAccount);
+
+    await fb.settleRound(user0, oracleAuthority, roundId, new BN(100), new BN(200));
+
+    await fb.settleBet(user0, roundId);
+    await fb.settleBet(user1, roundId);
+
+    // Get final balances
+    const finalUser1Balance = await provider.connection.getBalance(user0.publicKey);
+    const finalUser2Balance = await provider.connection.getBalance(user1.publicKey);
+    const finalAdminBalance = await provider.connection.getBalance(adminAccount);
+
+    // Calculate expected rewards
+    const totalBets = actualBetAmount1 + actualBetAmount2;
+    const winningBets = totalBets; // All bets are winning in this case
+    const expectedReward1 = actualBetAmount1 * totalBets / winningBets;
+    const expectedReward2 = actualBetAmount2 * totalBets / winningBets;
+
+    // Verify balances
+    const user1BalanceChange = finalUser1Balance - initialUser1Balance;
+    const user2BalanceChange = finalUser2Balance - initialUser2Balance;
+    const adminBalanceChange = finalAdminBalance - initialAdminBalance;
+
+    console.log("User1 balance change:", user1BalanceChange.toString());
+    console.log("Expected reward1:", expectedReward1.toString());
+    console.log("User2 balance change:", user2BalanceChange.toString());
+    console.log("Expected reward2:", expectedReward2.toString());
+    console.log("Admin balance change:", adminBalanceChange.toString());
+    console.log("Expected total fee:", fee1 + fee2);
+
+    // Users should receive their respective rewards
+    expect(user1BalanceChange).to.be.eq(expectedReward1);
+    expect(user2BalanceChange).to.be.eq(expectedReward2);
+    // Admin should have the total fees
+    expect(adminBalanceChange).to.be.eq(fee1 + fee2);
+  });
 });

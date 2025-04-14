@@ -3,7 +3,6 @@ use crate::states::*;
 use anchor_lang::prelude::*;
 use anchor_lang::prelude::{Account, Program, Signer, System};
 use anchor_lang::solana_program::ed25519_program::ID as ED25519_PROGRAM_ID;
-use anchor_lang::solana_program::keccak;
 use anchor_lang::solana_program::sysvar::instructions::{
     load_current_index_checked, load_instruction_at_checked, ID as INSTRUCTIONS_PROGRAM_ID,
 };
@@ -52,8 +51,16 @@ impl<'info> PlaceBet<'info> {
         let current_timestamp = clock.unix_timestamp as u64;
 
         if current_timestamp >= round_id {
-            return Err(MyErrorCode::RoundNotStarted.into());
+            return Err(MyErrorCode::RoundStarted.into());
         }
+
+        if amount == 0 {
+            return Err(MyErrorCode::ZeroAmount.into());
+        }
+
+        // Calculate fee (5% of bet amount)
+        let fee = amount * 5 / 100;
+        let bet_amount = amount - fee;
 
         // update account
         round_account.round_id = round_id;
@@ -61,14 +68,17 @@ impl<'info> PlaceBet<'info> {
         user_round_account.user = user.key();
 
         if is_up {
-            round_account.up += amount;
-            user_round_account.up += amount;
+            round_account.up += bet_amount;
+            user_round_account.up += bet_amount;
         } else {
-            round_account.down += amount;
-            user_round_account.down += amount;
+            round_account.down += bet_amount;
+            user_round_account.down += bet_amount;
         }
 
-        // transfer the amount to the admin account
+        // Add fee to admin account
+        admin_account.fee += fee;
+
+        // transfer the bet amount to the admin account
         system_program::transfer(
             CpiContext::new(
                 self.system_program.to_account_info(),
@@ -79,6 +89,64 @@ impl<'info> PlaceBet<'info> {
             ),
             amount,
         )?;
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+#[instruction(round_id: u64)]
+pub struct SettleRound<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(mut, seeds = [b"round", round_id.to_le_bytes().as_ref()], bump)]
+    pub round_account: Account<'info, RoundAccount>,
+
+    /// CHECK: This is a sysvar account
+    #[account(address = INSTRUCTIONS_PROGRAM_ID)]
+    pub ix_account: AccountInfo<'info>,
+
+    #[account(seeds = [b"admin"], bump)]
+    pub admin_account: Account<'info, AdminAccount>,
+
+    pub system_program: Program<'info, System>,
+}
+
+impl<'info> SettleRound<'info> {
+    pub fn process(
+        &mut self,
+        round_id: u64,
+        start_price: u64,
+        end_price: u64,
+        sig: [u8; 64],
+    ) -> Result<()> {
+        let round_account = &mut self.round_account;
+        let ix_account = &mut self.ix_account;
+        let admin_account = &self.admin_account;
+
+        if round_account.start_price.is_some() {
+            return Err(MyErrorCode::AlreadySettled.into());
+        }
+
+        let msg = [
+            round_id.to_le_bytes(),
+            start_price.to_le_bytes(),
+            end_price.to_le_bytes(),
+        ]
+        .concat();
+
+        msg!("msg: {:?}", msg);
+
+        verify_ed25519_signature(
+            ix_account,
+            &sig,
+            &msg,
+            &admin_account.oracle_authority.to_bytes(),
+        )?;
+
+        round_account.start_price = Some(start_price);
+        round_account.end_price = Some(end_price);
+
         Ok(())
     }
 }
@@ -98,102 +166,57 @@ pub struct SettleBet<'info> {
     #[account(mut, seeds = [b"admin"], bump)]
     pub admin_account: Account<'info, AdminAccount>,
 
-    /// CHECK: This is a sysvar account
-    #[account(address = INSTRUCTIONS_PROGRAM_ID)]
-    pub instruction_sysvar: AccountInfo<'info>,
-
     pub system_program: Program<'info, System>,
 }
 
 impl<'info> SettleBet<'info> {
-    pub fn process(
-        &mut self,
-        round_id: u64,
-        start_price: u64,
-        end_price: u64,
-        sig: [u8; 64],
-    ) -> Result<()> {
+    pub fn process(&mut self, _round_id: u64) -> Result<()> {
         let user = &mut self.user;
         let admin_account = &mut self.admin_account;
         let round_account = &mut self.round_account;
         let user_round_account = &mut self.user_round_account;
 
-        SettleBet::check_already_settled(user_round_account)?;
-        SettleBet::set_round_prices(
-            &self.instruction_sysvar,
-            round_id,
-            start_price,
-            end_price,
-            sig,
-            round_account,
-            admin_account,
-        )?;
-        SettleBet::settle_bet(user, admin_account, round_account, user_round_account)?;
-
-        Ok(())
-    }
-
-    fn check_already_settled(user_round_account: &UserRoundAccount) -> Result<()> {
-        if user_round_account.settled {
-            return Err(MyErrorCode::AlreadySettled.into());
-        }
-        Ok(())
-    }
-
-    fn set_round_prices(
-        instruction_sysvar: &AccountInfo,
-        round_id: u64,
-        start_price: u64,
-        end_price: u64,
-        sig: [u8; 64],
-        round_account: &mut RoundAccount,
-        admin_account: &AdminAccount,
-    ) -> Result<()> {
-        if round_account.start_price.is_none() {
-            let msg_str = format!("{}:{}:{}", round_id, start_price, end_price);
-            let msg = msg_str.as_bytes();
-
-            msg!("msg: {:?}", msg);
-
-            verify_ed25519_signature(
-                instruction_sysvar,
-                &sig,
-                &msg,
-                &admin_account.oracle_authority.to_bytes(),
-            )?;
-
-            round_account.start_price = Some(start_price);
-            round_account.end_price = Some(end_price);
-        }
-        Ok(())
-    }
-
-    fn settle_bet(
-        user: &Signer,
-        admin_account: &mut Account<AdminAccount>,
-        round_account: &RoundAccount,
-        user_round_account: &mut UserRoundAccount,
-    ) -> Result<()> {
         if round_account.start_price.is_none() {
             return Err(MyErrorCode::RoundNotSettled.into());
         }
 
-        let is_up = round_account.start_price.unwrap() < round_account.end_price.unwrap();
-        let total = round_account.up + round_account.down;
-        let mut reward = 0;
-
-        if is_up && user_round_account.up > 0 {
-            reward = total * user_round_account.up / round_account.up;
-        } else if !is_up && user_round_account.down > 0 {
-            reward = total * user_round_account.down / round_account.down;
+        if user_round_account.settled {
+            return Err(MyErrorCode::AlreadySettled.into());
         }
 
-        if reward > 0 {
-            let fee = reward * 5 / 100;
-            reward -= fee;
-            **user.to_account_info().try_borrow_mut_lamports()? += reward;
-            **admin_account.to_account_info().try_borrow_mut_lamports()? -= reward;
-            admin_account.fee += fee;
+        let is_up = round_account.start_price.unwrap() < round_account.end_price.unwrap();
+        let total_bets = round_account.up + round_account.down;
+        let bet_amount = if is_up {
+            user_round_account.up
+        } else {
+            user_round_account.down
+        };
+        let winning_bets = if is_up {
+            round_account.up
+        } else {
+            round_account.down
+        };
+
+        if bet_amount > 0 && winning_bets > 0 {
+            // Calculate reward using the new formula:
+            // user's winning bet * total bets / total winning bets
+            let reward = (bet_amount as u128)
+                .checked_mul(total_bets as u128)
+                .ok_or(MyErrorCode::Overflow)?
+                .checked_div(winning_bets as u128)
+                .ok_or(MyErrorCode::Overflow)? as u64;
+
+            // Transfer reward to user
+            system_program::transfer(
+                CpiContext::new(
+                    self.system_program.to_account_info(),
+                    system_program::Transfer {
+                        from: admin_account.to_account_info(),
+                        to: user.to_account_info(),
+                    },
+                ),
+                reward,
+            )?;
         }
 
         user_round_account.settled = true;
@@ -202,18 +225,18 @@ impl<'info> SettleBet<'info> {
 }
 
 fn verify_ed25519_signature(
-    sysvar_account: &AccountInfo,
+    ix_account: &AccountInfo,
     signature: &[u8],
     message: &[u8],
     public_key: &[u8],
 ) -> Result<()> {
-    let current_index = load_current_index_checked(sysvar_account)?;
+    let current_index = load_current_index_checked(ix_account)?;
 
     if current_index == 0 {
         return Err(MyErrorCode::InvalidInstruction.into());
     }
 
-    let ed25519_ix = load_instruction_at_checked(0, sysvar_account)?;
+    let ed25519_ix = load_instruction_at_checked(0, ix_account)?;
 
     if ed25519_ix.program_id != ED25519_PROGRAM_ID {
         return Err(MyErrorCode::InvalidInstruction.into());

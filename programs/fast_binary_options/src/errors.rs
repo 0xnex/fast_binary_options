@@ -16,8 +16,8 @@ pub enum MyErrorCode {
     AlreadySettled,
     #[msg("Round not settled")]
     RoundNotSettled,
-    #[msg("Round not started")]
-    RoundNotStarted,
+    #[msg("Round started")]
+    RoundStarted,
     #[msg("Invalid instruction")]
     InvalidInstruction,
     #[msg("signature verification failed")]
@@ -26,4 +26,8 @@ pub enum MyErrorCode {
     MessageVerificationFailed,
     #[msg("Pubkey verification failed")]
     PubkeyVerificationFailed,
+    #[msg("No fee to withdraw")]
+    NoFeeToWithdraw,
+    #[msg("Calculation overflow")]
+    Overflow,
 }
