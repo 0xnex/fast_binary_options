@@ -60,9 +60,9 @@ pub struct SetAdminAuthority<'info> {
 }
 
 impl<'info> SetAdminAuthority<'info> {
-    pub fn process(&mut self, authority: Pubkey) -> Result<()> {
+    pub fn process(&mut self, new_authority: Pubkey) -> Result<()> {
         let admin_account = &mut self.admin_account;
-        admin_account.authority = authority;
+        admin_account.authority = new_authority;
         Ok(())
     }
 }

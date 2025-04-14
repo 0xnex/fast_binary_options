@@ -7,9 +7,10 @@ use anchor_lang::solana_program::keccak;
 use anchor_lang::solana_program::sysvar::instructions::{
     load_current_index_checked, load_instruction_at_checked, ID as INSTRUCTIONS_PROGRAM_ID,
 };
+use anchor_lang::system_program;
 
 #[derive(Accounts)]
-#[instruction(round_id: u64, amount: u64, is_up: bool)]
+#[instruction(round_id: u64)]
 /// Place a bet on the binary options market
 pub struct PlaceBet<'info> {
     #[account(mut)]
@@ -40,18 +41,24 @@ pub struct PlaceBet<'info> {
 }
 
 impl<'info> PlaceBet<'info> {
-    pub fn process(&mut self, amount: u64, is_up: bool) -> Result<()> {
+    pub fn process(&mut self, round_id: u64, amount: u64, is_up: bool) -> Result<()> {
         let user = &mut self.user;
         let user_round_account = &mut self.user_round_account;
         let round_account = &mut self.round_account;
         let admin_account = &mut self.admin_account;
 
-        if amount == 0 {
-            return Err(MyErrorCode::ZeroAmount.into());
+        // check if the round is started
+        let clock = Clock::get()?;
+        let current_timestamp = clock.unix_timestamp as u64;
+
+        if current_timestamp >= round_id {
+            return Err(MyErrorCode::RoundNotStarted.into());
         }
 
-        **user.to_account_info().try_borrow_mut_lamports()? -= amount;
-        **admin_account.to_account_info().try_borrow_mut_lamports()? += amount;
+        // update account
+        round_account.round_id = round_id;
+        user_round_account.round_id = round_id;
+        user_round_account.user = user.key();
 
         if is_up {
             round_account.up += amount;
@@ -61,6 +68,17 @@ impl<'info> PlaceBet<'info> {
             user_round_account.down += amount;
         }
 
+        // transfer the amount to the admin account
+        system_program::transfer(
+            CpiContext::new(
+                self.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: user.to_account_info(),
+                    to: admin_account.to_account_info(),
+                },
+            ),
+            amount,
+        )?;
         Ok(())
     }
 }
@@ -132,9 +150,10 @@ impl<'info> SettleBet<'info> {
         admin_account: &AdminAccount,
     ) -> Result<()> {
         if round_account.start_price.is_none() {
-            let msg =
-                keccak::hash(format!("{}:{}:{}", round_id, start_price, end_price).as_bytes())
-                    .to_bytes();
+            let msg_str = format!("{}:{}:{}", round_id, start_price, end_price);
+            let msg = msg_str.as_bytes();
+
+            msg!("msg: {:?}", msg);
 
             verify_ed25519_signature(
                 instruction_sysvar,
@@ -190,14 +209,14 @@ fn verify_ed25519_signature(
 ) -> Result<()> {
     let current_index = load_current_index_checked(sysvar_account)?;
 
-    if current_index == 1 {
-        return Err(MyErrorCode::InvalidSignature.into());
+    if current_index == 0 {
+        return Err(MyErrorCode::InvalidInstruction.into());
     }
 
     let ed25519_ix = load_instruction_at_checked(0, sysvar_account)?;
 
     if ed25519_ix.program_id != ED25519_PROGRAM_ID {
-        return Err(MyErrorCode::InvalidSignature.into());
+        return Err(MyErrorCode::InvalidInstruction.into());
     }
 
     let data = ed25519_ix.data;
@@ -218,7 +237,7 @@ fn verify_ed25519_signature(
     let sig = &data[sig_start..sig_end];
 
     if sig != signature {
-        return Err(MyErrorCode::InvalidSignature.into());
+        return Err(MyErrorCode::SignatureVerificationFailed.into());
     }
 
     let msg_start = offsets.message_data_offset as usize;
@@ -226,7 +245,7 @@ fn verify_ed25519_signature(
     let msg = &data[msg_start..msg_end];
 
     if msg != message {
-        return Err(MyErrorCode::InvalidSignature.into());
+        return Err(MyErrorCode::MessageVerificationFailed.into());
     }
 
     let pk_start = offsets.public_key_offset as usize;
@@ -234,7 +253,7 @@ fn verify_ed25519_signature(
     let pk = &data[pk_start..pk_end];
 
     if pk != public_key {
-        return Err(MyErrorCode::InvalidSignature.into());
+        return Err(MyErrorCode::PubkeyVerificationFailed.into());
     }
 
     Ok(())
