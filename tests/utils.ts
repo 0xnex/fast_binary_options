@@ -161,7 +161,6 @@ class FastBinaryOptions {
       })
       .signers([user])
       .rpc({
-        skipPreflight: true,
         commitment: "confirmed"
       });
     await this.waitSigConfirmed(sig);
