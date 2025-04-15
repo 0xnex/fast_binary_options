@@ -157,7 +157,7 @@ pub struct SettleBet<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
-    #[account(mut, seeds = [b"user", user.key().as_ref(), round_id.to_le_bytes().as_ref()], bump)]
+    #[account(mut, close=user, seeds = [b"user", user.key().as_ref(), round_id.to_le_bytes().as_ref()], bump)]
     pub user_round_account: Account<'info, UserRoundAccount>,
 
     #[account(mut, seeds = [b"round", round_id.to_le_bytes().as_ref()], bump)]
@@ -175,10 +175,6 @@ impl<'info> SettleBet<'info> {
         let admin_account = &mut self.admin_account;
         let round_account = &mut self.round_account;
         let user_round_account = &mut self.user_round_account;
-
-        if round_account.start_price.is_none() {
-            return Err(MyErrorCode::RoundNotSettled.into());
-        }
 
         if user_round_account.settled {
             return Err(MyErrorCode::AlreadySettled.into());
@@ -207,16 +203,8 @@ impl<'info> SettleBet<'info> {
                 .ok_or(MyErrorCode::Overflow)? as u64;
 
             // Transfer reward to user
-            system_program::transfer(
-                CpiContext::new(
-                    self.system_program.to_account_info(),
-                    system_program::Transfer {
-                        from: admin_account.to_account_info(),
-                        to: user.to_account_info(),
-                    },
-                ),
-                reward,
-            )?;
+            **user.to_account_info().try_borrow_mut_lamports()? += reward;
+            **admin_account.to_account_info().try_borrow_mut_lamports()? -= reward;
         }
 
         user_round_account.settled = true;
