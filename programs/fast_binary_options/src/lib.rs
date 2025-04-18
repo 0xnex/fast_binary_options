@@ -6,7 +6,7 @@ pub mod states;
 use instructions::admin::*;
 use instructions::bet::*;
 
-declare_id!("HBhpjrgaPv98PLxjEbajwst19K3WHUBdAEW9RpEjvNee");
+declare_id!("GEUJ7QRkLE8vdkm2pF4pgqp5SuGeqWe3RrCCRtW68gtK");
 
 #[program]
 pub mod fast_binary_option {

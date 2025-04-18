@@ -17,9 +17,9 @@ fast_binary_options = "HBhpjrgaPv98PLxjEbajwst19K3WHUBdAEW9RpEjvNee"
 url = "https://api.apr.dev"
 
 [provider]
-# cluster = "https://devnet.helius-rpc.com/?api-key=49743ecb-4db4-41c2-bfdd-4b45e64a9a5a"
-cluster = "localnet"
-wallet = "~/.config/solana/id.json"
+cluster = "https://devnet.helius-rpc.com/?api-key=49743ecb-4db4-41c2-bfdd-4b45e64a9a5a"
+# cluster = "localnet"
+wallet = "./keys/deploy-keypair.json"
 
 
 [scripts]
