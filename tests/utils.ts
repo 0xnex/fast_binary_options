@@ -3,6 +3,8 @@ import { FastBinaryOption } from "../target/types/fast_binary_option";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, Keypair, LAMPORTS_PER_SOL, Transaction, AccountInfo } from "@solana/web3.js";
 import * as ed from "@noble/ed25519";
+import { readFileSync } from "fs";
+import { resolve } from "path";
 
 
 export type AdminAccountData = {
@@ -51,10 +53,10 @@ class FastBinaryOptions {
     return Math.floor(Date.now() / (300 * 1000)) * 300 + 300;
   }
 
-  async initializeAdmin(admin: Keypair, oracleAuthority: Keypair) {
-    const [adminPDA] = this.getPDAs(admin, this.getRoundId());
+  async initializeAdmin(admin: Keypair, oracleAuthority: PublicKey): Promise<string> {
+    const [adminPDA] = this.getPDAs(admin.publicKey, this.getRoundId());
     const sig = await this.program.methods
-      .initializeAdmin(oracleAuthority.publicKey)
+      .initializeAdmin(oracleAuthority)
       .accountsPartial({
         adminAccount: adminPDA,
         user: admin.publicKey,
@@ -63,10 +65,11 @@ class FastBinaryOptions {
       .signers([admin])
       .rpc();
     await this.waitSigConfirmed(sig);
+    return sig;
   }
 
   async updateOracleAuthority(admin: Keypair, oracleAuthority: Keypair) {
-    const [adminPDA] = this.getPDAs(admin, this.getRoundId());
+    const [adminPDA] = this.getPDAs(admin.publicKey, this.getRoundId());
     const sig = await this.program.methods
       .setOracleAuthority(oracleAuthority.publicKey)
       .accountsPartial({
@@ -79,7 +82,7 @@ class FastBinaryOptions {
   }
 
   async updateAdminAuthority(admin: Keypair, newAdminAuthority: Keypair) {
-    const [adminPDA] = this.getPDAs(admin, this.getRoundId());
+    const [adminPDA] = this.getPDAs(admin.publicKey, this.getRoundId());
     const sig = await this.program.methods
       .setAdminAuthority(newAdminAuthority.publicKey)
       .accountsPartial({
@@ -93,7 +96,7 @@ class FastBinaryOptions {
 
 
   async placeBet(user: Keypair, roundId: number, amount: BN, isUp: boolean) {
-    const [adminAccount, roundAccount, userRoundAccount] = this.getPDAs(user, roundId);
+    const [adminAccount, roundAccount, userRoundAccount] = this.getPDAs(user.publicKey, roundId);
     const sig = await this.program.methods.placeBet(new BN(roundId), amount, isUp)
       .accountsPartial({
         user: user.publicKey,
@@ -109,7 +112,7 @@ class FastBinaryOptions {
     await this.waitSigConfirmed(sig);
   }
   async settleRound(user: Keypair, oracleAuthority: Keypair, roundId: number, startPrice: BN, endPrice: BN) {
-    const [adminAccount, roundAccount] = this.getPDAs(user, roundId);
+    const [adminAccount, roundAccount] = this.getPDAs(user.publicKey, roundId);
 
     const msg = Buffer.concat([
       new BN(roundId).toArrayLike(Buffer, "le", 8),
@@ -150,7 +153,7 @@ class FastBinaryOptions {
   }
 
   async settleBet(user: Keypair, roundId: number) {
-    const [adminAccount, roundAccount, userRoundAccount] = this.getPDAs(user, roundId);
+    const [adminAccount, roundAccount, userRoundAccount] = this.getPDAs(user.publicKey, roundId);
     const sig = await this.program.methods.settleBet(new BN(roundId))
       .accountsPartial({
         user: user.publicKey,
@@ -167,7 +170,7 @@ class FastBinaryOptions {
   }
 
   async withdrawFees(admin: Keypair) {
-    const [adminAccount] = this.getPDAs(admin, this.getRoundId());
+    const [adminAccount] = this.getPDAs(admin.publicKey, this.getRoundId());
     const sig = await this.program.methods.withdrawFee()
       .accountsPartial({
         authority: admin.publicKey,
@@ -182,10 +185,10 @@ class FastBinaryOptions {
     await this.waitSigConfirmed(sig);
   }
 
-  getPDAs(user: Keypair, roundId: number): [PublicKey, PublicKey, PublicKey] {
+  getPDAs(user: PublicKey, roundId: number): [PublicKey, PublicKey, PublicKey] {
     const roundIdSeed = new BN(roundId).toArrayLike(Buffer, "le", 8)
     const userRoundAccount = PublicKey.findProgramAddressSync(
-      [Buffer.from("user"), user.publicKey.toBuffer(), roundIdSeed],
+      [Buffer.from("user"), user.toBuffer(), roundIdSeed],
       this.program.programId
     )[0];
     const roundAccount = PublicKey.findProgramAddressSync(
@@ -199,7 +202,7 @@ class FastBinaryOptions {
     return [adminAccount, roundAccount, userRoundAccount];
   }
 
-  async getPDAData(user: Keypair, roundId: number): Promise<[AdminAccountData, RoundAccountData, UserRoundAccountData]> {
+  async getPDAData(user: PublicKey, roundId: number): Promise<[AdminAccountData, RoundAccountData, UserRoundAccountData]> {
     const [adminAccount, roundAccount, userRoundAccount] = this.getPDAs(user, roundId);
     const adminAccountData = await this.program.account.adminAccount.fetchNullable(adminAccount);
     const roundAccountData = await this.program.account.roundAccount.fetchNullable(roundAccount);
@@ -209,3 +212,9 @@ class FastBinaryOptions {
 }
 export default FastBinaryOptions;
 
+export  function loadKeypairFromFile(filePath: string): Keypair {
+  const loadedKeyBytes = Uint8Array.from(
+    JSON.parse(readFileSync(filePath, "utf8")),
+  );
+  return Keypair.fromSecretKey(loadedKeyBytes);
+}
