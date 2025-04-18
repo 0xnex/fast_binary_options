@@ -89,6 +89,14 @@ impl<'info> PlaceBet<'info> {
             ),
             amount,
         )?;
+
+        emit!(BetPlaced {
+            user: user.key(),
+            round_id,
+            amount,
+            is_up,
+        });
+
         Ok(())
     }
 }
@@ -147,6 +155,12 @@ impl<'info> SettleRound<'info> {
         round_account.start_price = Some(start_price);
         round_account.end_price = Some(end_price);
 
+        emit!(RoundSettled {
+            round_id,
+            start_price,
+            end_price,
+        });
+
         Ok(())
     }
 }
@@ -170,7 +184,7 @@ pub struct SettleBet<'info> {
 }
 
 impl<'info> SettleBet<'info> {
-    pub fn process(&mut self, _round_id: u64) -> Result<()> {
+    pub fn process(&mut self, round_id: u64) -> Result<()> {
         let user = &mut self.user;
         let admin_account = &mut self.admin_account;
         let round_account = &mut self.round_account;
@@ -193,10 +207,11 @@ impl<'info> SettleBet<'info> {
             round_account.down
         };
 
+        let mut reward = 0;
         if bet_amount > 0 && winning_bets > 0 {
             // Calculate reward using the new formula:
             // user's winning bet * total bets / total winning bets
-            let reward = (bet_amount as u128)
+            reward = (bet_amount as u128)
                 .checked_mul(total_bets as u128)
                 .ok_or(MyErrorCode::Overflow)?
                 .checked_div(winning_bets as u128)
@@ -208,6 +223,14 @@ impl<'info> SettleBet<'info> {
         }
 
         user_round_account.settled = true;
+
+        emit!(BetSettled {
+            user: user.key(),
+            round_id,
+            amount: bet_amount,
+            is_up,
+            reward,
+        });
         Ok(())
     }
 }
@@ -280,3 +303,30 @@ struct Ed25519SignatureOffsets {
     message_data_size: u16,
     message_instruction_index: u16,
 }
+
+#[event]
+pub struct BetPlaced {
+    pub user: Pubkey,
+    pub round_id: u64,
+    pub amount: u64,
+    pub is_up: bool,
+}
+
+#[event]
+pub struct RoundSettled {
+    pub round_id: u64,
+    pub start_price: u64,
+    pub end_price: u64,
+}
+
+#[event]
+pub struct BetSettled {
+    pub user: Pubkey,
+    pub round_id: u64,
+    pub amount: u64,
+    pub is_up: bool,
+    pub reward: u64,
+}
+
+
+
