@@ -16,8 +16,8 @@ pub struct RoundAccount {
     pub round_id: u64,
     pub up: u64,
     pub down: u64,
-    pub start_price: Option<u64>,
-    pub end_price: Option<u64>,
+    pub open_price: Option<u64>,
+    pub close_price: Option<u64>,
 }
 
 #[account]

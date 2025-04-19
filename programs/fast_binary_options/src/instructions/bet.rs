@@ -124,22 +124,22 @@ impl<'info> SettleRound<'info> {
     pub fn process(
         &mut self,
         round_id: u64,
-        start_price: u64,
-        end_price: u64,
+        open_price: u64,
+        close_price: u64,
         sig: [u8; 64],
     ) -> Result<()> {
         let round_account = &mut self.round_account;
         let ix_account = &mut self.ix_account;
         let admin_account = &self.admin_account;
 
-        if round_account.start_price.is_some() {
+        if round_account.open_price.is_some() {
             return Err(MyErrorCode::AlreadySettled.into());
         }
 
         let msg = [
             round_id.to_le_bytes(),
-            start_price.to_le_bytes(),
-            end_price.to_le_bytes(),
+            open_price.to_le_bytes(),
+            close_price.to_le_bytes(),
         ]
         .concat();
 
@@ -152,13 +152,13 @@ impl<'info> SettleRound<'info> {
             &admin_account.oracle_authority.to_bytes(),
         )?;
 
-        round_account.start_price = Some(start_price);
-        round_account.end_price = Some(end_price);
+        round_account.open_price = Some(open_price);
+        round_account.close_price = Some(close_price);
 
         emit!(RoundSettled {
             round_id,
-            start_price,
-            end_price,
+            open_price,
+            close_price,
         });
 
         Ok(())
@@ -194,7 +194,7 @@ impl<'info> SettleBet<'info> {
             return Err(MyErrorCode::AlreadySettled.into());
         }
 
-        let is_up = round_account.start_price.unwrap() < round_account.end_price.unwrap();
+        let is_up = round_account.open_price.unwrap() < round_account.close_price.unwrap();
         let total_bets = round_account.up + round_account.down;
         let bet_amount = if is_up {
             user_round_account.up
@@ -315,8 +315,8 @@ pub struct BetPlaced {
 #[event]
 pub struct RoundSettled {
     pub round_id: u64,
-    pub start_price: u64,
-    pub end_price: u64,
+    pub open_price: u64,
+    pub close_price: u64,
 }
 
 #[event]
